@@ -14,8 +14,7 @@ def er_login(username, password):
             username=username,
             password=password
         )
-        # Try a simple call to check credentials
-        er.get_subjects(limit=1)
+        er.get_subjects(limit=1)          # Try a simple call to check credentials
         return True
     except Exception:
         return False
@@ -37,14 +36,13 @@ if not st.session_state["authenticated"]:
             st.session_state["username"] = username
             st.session_state["password"] = password
             st.success("Login successful!")
-            st.rerun() 
+            st.rerun()   # force restart to load app
         else:
             st.error("Invalid credentials. Please try again.")
     st.stop()
 
-# After this point, only the dashboard is shown!
-username = st.session_state["username"]
-password = st.session_state["password"]
+username = st.session_state["username"]  # save for authentication later
+password = st.session_state["password"]  # save for authentication later
 
 
 
@@ -52,12 +50,10 @@ password = st.session_state["password"]
 
 
 
-
-
-
-
+#### PULL DATA ###################################
+# get list of active NANW giraffe subjects
 @st.cache_data(ttl=3600)
-def get_active_nanw_subjects():
+def get_active_nanw_subjects(): 
     er = EarthRangerIO(
         server="https://twiga.pamdas.org",
         username=username,
@@ -68,8 +64,9 @@ def get_active_nanw_subjects():
     active = [s for s in subjects if s.get("is_active") is True]
     return active
 
+# get list of active Adopt A Giraffe giraffe subjects
 @st.cache_data(ttl=3600)
-def get_active_aag_subjects():
+def get_active_aag_subjects():   
     er = EarthRangerIO(
         server="https://twiga.pamdas.org",
         username=username,
@@ -85,7 +82,7 @@ aag_id_to_name = {s["id"]: s["name"] for s in aag_subjects if "id" in s and "nam
 aag_ids = set(aag_id_to_name.keys())
 
 
-
+# get giraffe nw monitoring events
 @st.cache_data(ttl=3600)
 def load_data():
     er = EarthRangerIO(
@@ -93,12 +90,10 @@ def load_data():
         username=username,
         password=password
     )
-    
     event_cat = "monitoring_nanw"
     event_type = "giraffe_nw_monitoring"
     since = "2024-07-01T00:00:00Z"
-    until = "2025-07-07T23:59:59Z"
-
+    until = datetime.utcnow().isoformat(timespec="seconds") + "Z"  # always till now sys.date
     events = er.get_events(
         event_category=event_cat,
         since=since,
@@ -109,7 +104,7 @@ def load_data():
     flat = json_normalize(events.to_dict(orient="records"))
     giraffe_only = flat[flat["event_type"] == event_type]
 
-    giraffe_only = giraffe_only.explode("event_details.Herd").reset_index(drop=True)
+    giraffe_only = giraffe_only.explode("event_details.Herd").reset_index(drop=True)  # explore nested herd details
     herd_df = json_normalize(giraffe_only["event_details.Herd"])
     events_final = pd.concat([giraffe_only.drop(columns="event_details.Herd"), herd_df], axis=1)
 
@@ -117,7 +112,7 @@ def load_data():
 
 df = load_data()
 
-# Rename columns
+# rename columns for clarity
 rename_map = {
     "reported_by.id": "user_id",
     "reported_by.name": "user_name",
@@ -155,12 +150,12 @@ df = df.dropna(subset=["evt_dttm"])
 
 
 
-
-# Sidebar filters
+#### DASHBOARD LAYOUT ###############################################
+# sidebar filter
 st.sidebar.header("Filter Date Range")
-# Clean evt_dttm and drop NaT values
+
 df["evt_dttm"] = pd.to_datetime(df["evt_dttm"], errors="coerce")
-df = df.dropna(subset=["evt_dttm"])
+df = df.dropna(subset=["evt_dttm"])   # clean evt_dttm and drop na values
 if df["evt_dttm"].notna().any():
     min_date = df["evt_dttm"].min().date()
     max_date = df["evt_dttm"].max().date()
@@ -168,34 +163,31 @@ else:
     min_date = datetime.today().date()
     max_date = datetime.today().date()
 
-date_range = st.sidebar.date_input("Select date range", [min_date, max_date])
-
+date_range = st.sidebar.date_input("Select date range", [min_date, max_date]) # filter data by selected date range
 filtered_df = df[(df["evt_dttm"].dt.date >= date_range[0]) & (df["evt_dttm"].dt.date <= date_range[1])]
 
 
+st.title("🦒 GCF Namibia NW monitoring")  # main heading
 
-#### DASHBOARD LAYOUT ###############################################
-st.title("🦒 GCF Namibia NW monitoring")
-
-#### heading metrics
+# header metrics
 st.sidebar.metric("Current population size", len(active_subjects)) # shown in side bar separately
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.metric("Distinct individuals seen", df["evt_girID"].nunique())
+    st.metric("Distinct individuals seen", df["evt_girID"].nunique()) # unique individuals seen
 with col2:
-    herd_count = filtered_df["evt_herdSize"].count()
+    herd_count = filtered_df["evt_herdSize"].count()  # unique herds seen
     st.metric("Herds seen", herd_count)
 with col3:
-    avg_herd_size = filtered_df["evt_herdSize"].mean()
+    avg_herd_size = filtered_df["evt_herdSize"].mean()  # mean herd size
     st.metric("Average herd size", f"{avg_herd_size:.1f}" if not pd.isna(avg_herd_size) else "N/A")
 
-#### Sighting map
+# sighting map
 st.subheader("📍 Sighting Map")
 map_df = filtered_df.dropna(subset=["lat", "lon"])
 st.map(map_df[["lat", "lon"]])
 
-#### Sightings/month bar chart
+# sightings/month bar chart
 st.subheader("📅 Sightings per Month")
 monthly_counts = (
     filtered_df.groupby(filtered_df["evt_dttm"].dt.to_period("M"))
@@ -206,7 +198,7 @@ monthly_counts["Month"] = monthly_counts["evt_dttm"].astype(str)
 fig1 = px.bar(monthly_counts, x="Month", y="Sightings", title="Monthly Sightings")
 st.plotly_chart(fig1, use_container_width=True)
 
-#### Age/sex breakdown bar chart
+# age/sex breakdown bar chart
 st.subheader("🧬 Age / Sex Breakdown")
 breakdown = (
     filtered_df.groupby(["evt_girSex", "evt_girAge"])
@@ -216,7 +208,7 @@ breakdown = (
 fig2 = px.bar(breakdown, x="evt_girAge", y="Count", color="evt_girSex", barmode="group")
 st.plotly_chart(fig2, use_container_width=True)
 
-#### Table of giraffe names 
+# table of seen giraffe names 
 st.subheader("🦒 List of giraffe seen")
 id_to_name = {s["id"]: s["name"] for s in active_subjects if "id" in s and "name" in s}   # Build a mapping from subject ID to name
 filtered_df["giraffe_name"] = filtered_df["evt_girID"].map(id_to_name)   # Map evt_girID to giraffe name
@@ -228,7 +220,7 @@ girid_table = (
 )
 st.dataframe(girid_table[["giraffe_name"]].drop_duplicates().sort_values("giraffe_name").reset_index(drop=True), use_container_width=True)
 
-#### Table of Adopt A Giraffe giraffe seen 
+# table of seen Adopt A Giraffe giraffe  
 aag_seen = filtered_df[filtered_df["evt_girID"].isin(aag_ids)].copy()
 aag_seen["giraffe_name"] = aag_seen["evt_girID"].map(aag_id_to_name)
 aag_table = (
